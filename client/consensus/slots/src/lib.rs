@@ -356,11 +356,12 @@ pub trait SimpleSlotWorker<B: BlockT> {
 		};
 
 		info!(
-			// target: logging_target,
-			"🔖 Pre-sealed-test block for proposal at {}. Hash now {:?}, previously {:?}.",
+			target: logging_target,
+			"🔖 Pre-sealed block for proposal at {}. Hash now {:?}, previously {:?}. Logging target: {:?}",
 			header_num,
 			block_import_params.post_hash(),
 			header_hash,
+			logging_target
 		);
 
 		telemetry!(

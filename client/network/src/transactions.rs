@@ -38,7 +38,7 @@ use crate::{
 use codec::{Decode, Encode};
 use futures::{channel::mpsc, prelude::*, stream::FuturesUnordered};
 use libp2p::{multiaddr, PeerId};
-use log::{debug, trace, warn};
+use log::{debug, info, trace, warn};
 use prometheus_endpoint::{register, Counter, PrometheusError, Registry, U64};
 use sp_runtime::traits::Block as BlockT;
 use std::{
@@ -118,7 +118,7 @@ impl<H: ExHashT> Future for PendingTransaction<H> {
 		let mut this = self.project();
 
 		if let Poll::Ready(import_result) = Pin::new(&mut this.validation).poll_unpin(cx) {
-			return Poll::Ready((this.tx_hash.clone(), import_result))
+			return Poll::Ready((this.tx_hash.clone(), import_result));
 		}
 
 		Poll::Pending
@@ -187,11 +187,7 @@ impl TransactionsHandlerPrototype {
 			transaction_pool,
 			local_role,
 			from_controller,
-			metrics: if let Some(r) = metrics_registry {
-				Some(Metrics::register(r)?)
-			} else {
-				None
-			},
+			metrics: if let Some(r) = metrics_registry { Some(Metrics::register(r)?) } else { None },
 		};
 
 		let controller = TransactionsHandlerController { to_handler, gossip_enabled };
@@ -306,21 +302,19 @@ impl<B: BlockT + 'static, H: ExHashT> TransactionsHandler<B, H> {
 		match event {
 			Event::Dht(_) => {},
 			Event::SyncConnected { remote } => {
-				let addr = iter::once(multiaddr::Protocol::P2p(remote.into()))
-					.collect::<multiaddr::Multiaddr>();
-				let result = self.service.add_peers_to_reserved_set(
-					self.protocol_name.clone(),
-					iter::once(addr).collect(),
-				);
+				let addr =
+					iter::once(multiaddr::Protocol::P2p(remote.into())).collect::<multiaddr::Multiaddr>();
+				let result = self
+					.service
+					.add_peers_to_reserved_set(self.protocol_name.clone(), iter::once(addr).collect());
 				if let Err(err) = result {
 					log::error!(target: "sync", "Add reserved peer failed: {}", err);
 				}
 			},
 			Event::SyncDisconnected { remote } => {
-				self.service.remove_peers_from_reserved_set(
-					self.protocol_name.clone(),
-					iter::once(remote).collect(),
-				);
+				self
+					.service
+					.remove_peers_from_reserved_set(self.protocol_name.clone(), iter::once(remote).collect());
 			},
 
 			Event::NotificationStreamOpened { remote, protocol, role, .. }
@@ -337,9 +331,7 @@ impl<B: BlockT + 'static, H: ExHashT> TransactionsHandler<B, H> {
 				);
 				debug_assert!(_was_in.is_none());
 			},
-			Event::NotificationStreamClosed { remote, protocol }
-				if protocol == self.protocol_name =>
-			{
+			Event::NotificationStreamClosed { remote, protocol } if protocol == self.protocol_name => {
 				let _peer = self.peers.remove(&remote);
 				debug_assert!(_peer.is_some());
 			},
@@ -347,12 +339,12 @@ impl<B: BlockT + 'static, H: ExHashT> TransactionsHandler<B, H> {
 			Event::NotificationsReceived { remote, messages } => {
 				for (protocol, message) in messages {
 					if protocol != self.protocol_name {
-						continue
+						continue;
 					}
 
-					if let Ok(m) = <message::Transactions<B::Extrinsic> as Decode>::decode(
-						&mut message.as_ref(),
-					) {
+					if let Ok(m) =
+						<message::Transactions<B::Extrinsic> as Decode>::decode(&mut message.as_ref())
+					{
 						self.on_transactions(remote, m);
 					} else {
 						warn!(target: "sub-libp2p", "Failed to decode transactions list");
@@ -372,16 +364,17 @@ impl<B: BlockT + 'static, H: ExHashT> TransactionsHandler<B, H> {
 			debug!(target: "sync", "Peer {} is trying to send transactions to the light node", who);
 			self.service.disconnect_peer(who, self.protocol_name.clone());
 			self.service.report_peer(who, rep::UNEXPECTED_TRANSACTIONS);
-			return
+			return;
 		}
 
 		// Accept transactions only when enabled
 		if !self.gossip_enabled.load(Ordering::Relaxed) {
 			trace!(target: "sync", "{} Ignoring transactions while disabled", who);
-			return
+			return;
 		}
 
-		trace!(target: "sync", "Received {} transactions from {}", transactions.len(), who);
+		info!(target: "sync", "Received {:?} transactions from {}", transactions, who);
+
 		if let Some(ref mut peer) = self.peers.get_mut(&who) {
 			for t in transactions {
 				if self.pending_transactions.len() > MAX_PENDING_TRANSACTIONS {
@@ -390,7 +383,7 @@ impl<B: BlockT + 'static, H: ExHashT> TransactionsHandler<B, H> {
 						"Ignoring any further transactions that exceed `MAX_PENDING_TRANSACTIONS`({}) limit",
 						MAX_PENDING_TRANSACTIONS,
 					);
-					break
+					break;
 				}
 
 				let hash = self.transaction_pool.hash_of(&t);
@@ -416,8 +409,7 @@ impl<B: BlockT + 'static, H: ExHashT> TransactionsHandler<B, H> {
 
 	fn on_handle_transaction_import(&mut self, who: PeerId, import: TransactionImport) {
 		match import {
-			TransactionImport::KnownGood =>
-				self.service.report_peer(who, rep::ANY_TRANSACTION_REFUND),
+			TransactionImport::KnownGood => self.service.report_peer(who, rep::ANY_TRANSACTION_REFUND),
 			TransactionImport::NewGood => self.service.report_peer(who, rep::GOOD_TRANSACTION),
 			TransactionImport::Bad => self.service.report_peer(who, rep::BAD_TRANSACTION),
 			TransactionImport::None => {},
@@ -426,10 +418,10 @@ impl<B: BlockT + 'static, H: ExHashT> TransactionsHandler<B, H> {
 
 	/// Propagate one transaction.
 	pub fn propagate_transaction(&mut self, hash: &H) {
-		debug!(target: "sync", "Propagating transaction [{:?}]", hash);
+		info!(target: "sync", "Propagating transaction [{:?}]", self.transaction_pool.transaction(hash));
 		// Accept transactions only when enabled
 		if !self.gossip_enabled.load(Ordering::Relaxed) {
-			return
+			return;
 		}
 		if let Some(transaction) = self.transaction_pool.transaction(hash) {
 			let propagated_to = self.do_propagate_transactions(&[(hash.clone(), transaction)]);
@@ -447,7 +439,7 @@ impl<B: BlockT + 'static, H: ExHashT> TransactionsHandler<B, H> {
 		for (who, peer) in self.peers.iter_mut() {
 			// never send transactions to the light node
 			if matches!(peer.role, ObservedRole::Light) {
-				continue
+				continue;
 			}
 
 			let (hashes, to_send): (Vec<_>, Vec<_>) = transactions
@@ -463,7 +455,8 @@ impl<B: BlockT + 'static, H: ExHashT> TransactionsHandler<B, H> {
 					propagated_to.entry(hash).or_default().push(who.to_base58());
 				}
 				trace!(target: "sync", "Sending {} transactions to {}", to_send.len(), who);
-				self.service
+				self
+					.service
 					.write_notification(*who, self.protocol_name.clone(), to_send.encode());
 			}
 		}
@@ -479,7 +472,7 @@ impl<B: BlockT + 'static, H: ExHashT> TransactionsHandler<B, H> {
 	fn propagate_transactions(&mut self) {
 		// Accept transactions only when enabled
 		if !self.gossip_enabled.load(Ordering::Relaxed) {
-			return
+			return;
 		}
 		debug!(target: "sync", "Propagating transactions");
 		let transactions = self.transaction_pool.transactions();
